@@ -1,0 +1,448 @@
+import sys
+import win32gui, win32con, win32api
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QListWidget, QPushButton,
+    QComboBox, QSpinBox, QLabel, QCheckBox, QVBoxLayout, QHBoxLayout,
+    QSystemTrayIcon, QMenu
+)
+from PyQt6.QtGui import QCursor, QIcon, QAction
+from PyQt6.QtCore import QTimer
+
+
+# The eight edge‐segments, clockwise
+SEGMENTS = [
+    "Top-Left", "Top-Right",
+    "Right-Top", "Right-Bottom",
+    "Bottom-Right", "Bottom-Left",
+    "Left-Bottom", "Left-Top"
+]
+
+# Map segment → slide direction index (0=Left,1=Right,2=Top,3=Bottom)
+DIRECTION_MAP = {
+    "Top-Left":     2, "Top-Right":    2,
+    "Right-Top":    1, "Right-Bottom": 1,
+    "Bottom-Right": 3, "Bottom-Left":  3,
+    "Left-Bottom":  0, "Left-Top":     0
+}
+
+def enum_visible_windows():
+    """Return list of (hwnd, title) for all visible, titled windows."""
+    wins = []
+    def cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd)
+            if title:
+                wins.append((hwnd, title))
+    win32gui.EnumWindows(cb, None)
+    return wins
+
+class Slider:
+    """Animate a window between two positions with optional easing/fade/activation."""
+    def __init__(
+        self, hwnd, start, end,
+        steps, interval,
+        use_ease=False, use_fade=False,
+        into_view=False, activate_on_show=False, cb=None
+    ):
+        self.hwnd = hwnd
+        self.sx, self.sy = start
+        self.ex, self.ey = end
+        self.steps = max(1, steps)
+        self.interval = interval
+        self.use_ease = use_ease
+        self.use_fade = use_fade
+        self.into_view = into_view
+        self.activate_on_show = activate_on_show
+        self.cb = cb
+        self.i = 0
+
+        # enable layered style if fading
+        if use_fade:
+            ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            win32gui.SetWindowLong(
+                hwnd, win32con.GWL_EXSTYLE,
+                ex | win32con.WS_EX_LAYERED
+            )
+
+        self.timer = QTimer()
+        self.timer.setInterval(self.interval)
+        self.timer.timeout.connect(self._step)
+
+    def start(self):
+        self.i = 0
+        self.timer.start()
+
+    def _step(self):
+        self.i += 1
+        t = self.i / self.steps
+        if self.use_ease:
+            t = t * t * (3 - 2 * t)  # cubic smoothstep
+
+        # interpolate position
+        nx = int(self.sx + (self.ex - self.sx) * t)
+        ny = int(self.sy + (self.ey - self.sy) * t)
+
+        # move without activate mid‐animation
+        flags = win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+        win32gui.SetWindowPos(self.hwnd, None, nx, ny, 0, 0, flags)
+
+        # fade if enabled
+        if self.use_fade:
+            alpha = int(255 * t) if self.into_view else int(255 * (1 - t))
+            win32gui.SetLayeredWindowAttributes(
+                self.hwnd, 0, alpha, win32con.LWA_ALPHA
+            )
+
+        # end of animation
+        if self.i >= self.steps:
+            self.timer.stop()
+            # final reposition without NOACTIVATE so focus can shift
+            if self.activate_on_show and self.into_view:
+                win32gui.SetWindowPos(
+                    self.hwnd, None,
+                    self.ex, self.ey, 0, 0,
+                    win32con.SWP_NOSIZE | win32con.SWP_NOZORDER
+                )
+                try:
+                    win32gui.SetForegroundWindow(self.hwnd)
+                except Exception:
+                    pass
+
+            if self.cb:
+                self.cb()
+
+class SlideAnyWindowApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PopOut-Any")
+        # configs: segment → list of window dicts
+        self.window_cfg = {seg: [] for seg in SEGMENTS}
+        self.segment_active = None    # which segment is currently popped-out
+        self.interacting = False      # True once slide-in finishes
+        self.animators = []           # hold Slider refs
+
+        # build UI
+        c = QWidget(); self.setCentralWidget(c)
+        v = QVBoxLayout(c)
+
+        # 1) window picker + refresh
+        v.addWidget(QLabel("1) Select window"))
+        self.win_list = QListWidget()
+        self.win_list.itemSelectionChanged.connect(self._on_sel)
+        v.addWidget(self.win_list)
+        btn_refresh = QPushButton("Refresh Windows")
+        btn_refresh.clicked.connect(self._populate_windows)
+        v.addWidget(btn_refresh)
+
+        # 2) edge segment
+        v.addWidget(QLabel("2) Edge segment"))
+        self.seg_combo = QComboBox()
+        self.seg_combo.addItems(SEGMENTS)
+        v.addWidget(self.seg_combo)
+
+        # speed & steps
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Interval ms"))
+        self.speed = QSpinBox(); self.speed.setRange(5,500); self.speed.setValue(15)
+        row.addWidget(self.speed)
+        row.addStretch(1)
+        row.addWidget(QLabel("Steps"))
+        self.steps = QSpinBox(); self.steps.setRange(5,200); self.steps.setValue(30)
+        row.addWidget(self.steps)
+        v.addLayout(row)
+
+        # 3) fancy animations options
+        v.addWidget(QLabel("3) Animation"))
+        self.chk_ease = QCheckBox("Use Easing")
+        self.chk_fade = QCheckBox("Fade Window")
+        v.addWidget(self.chk_ease)
+        v.addWidget(self.chk_fade)
+
+        # assign to segment
+        self.assign_btn = QPushButton("Assign to Segment")
+        self.assign_btn.clicked.connect(self._assign)
+        v.addWidget(self.assign_btn)
+
+        # 4) current assignments + remove
+        v.addWidget(QLabel("4) Current assignments"))
+        self.assign_list = QListWidget()
+        self.assign_list.itemSelectionChanged.connect(self._on_assign_sel)
+        v.addWidget(self.assign_list)
+        self.remove_btn = QPushButton("Remove Selected")
+        self.remove_btn.clicked.connect(self._remove_assignment)
+        v.addWidget(self.remove_btn)
+
+        # enable/disable edge trigger
+        self.enable_btn = QPushButton("Enable Edge Trigger")
+        self.enable_btn.setCheckable(True)
+        self.enable_btn.toggled.connect(self._on_enable)
+        v.addWidget(self.enable_btn)
+
+        # disable controls until needed
+        for ctl in (
+            self.seg_combo, self.speed, self.steps,
+            self.chk_ease, self.chk_fade, self.assign_btn
+        ):
+            ctl.setEnabled(False)
+        self.remove_btn.setEnabled(False)
+        self.enable_btn.setEnabled(False)
+
+        # set up timers:
+        self.edge_timer = QTimer(self)
+        self.edge_timer.setInterval(100)
+        self.edge_timer.timeout.connect(self._check_cursor_edge)
+
+        self.focus_timer = QTimer(self)
+        self.focus_timer.setInterval(200)
+        self.focus_timer.timeout.connect(self._check_focus)
+
+        self.tray_icon = QSystemTrayIcon(QIcon("icon.ico"), parent=self)
+        tray_menu = QMenu()
+        restore_act = QAction("Restore", self, triggered=self._restore_from_tray)
+        exit_act    = QAction("Exit",    self, triggered=QApplication.quit)
+        tray_menu.addAction(restore_act)
+        tray_menu.addAction(exit_act)
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._on_tray_activated)
+
+        # initial population
+        self._populate_windows()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == event.Type.WindowStateChange:
+            if self.isMinimized():
+                # hide main window, show tray
+                QTimer.singleShot(0, self.hide)
+                self.tray_icon.show()
+                
+    def _on_tray_activated(self, reason):
+        # double‐click tray icon → restore
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._restore_from_tray()
+
+    def _restore_from_tray(self):
+        """Restore window from tray."""
+        self.showNormal()
+        self.activateWindow()
+        self.tray_icon.hide()
+
+    def closeEvent(self, event):
+        # before closing, turn off edge‐trigger cleanly
+        if self.enable_btn.isChecked():
+            self.enable_btn.setChecked(False)   # calls your _on_enable(False)
+        event.accept()
+
+    def _hide_taskbar(self, hwnd):
+        """Remove the window’s taskbar icon."""
+        ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+        ex = (ex & ~win32con.WS_EX_APPWINDOW) | win32con.WS_EX_TOOLWINDOW
+        win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex)
+        win32gui.SetWindowPos(
+            hwnd, None, 0, 0, 0, 0,
+            win32con.SWP_NOMOVE
+          | win32con.SWP_NOSIZE
+          | win32con.SWP_NOZORDER
+          | win32con.SWP_FRAMECHANGED
+        )
+
+    def _show_taskbar(self, hwnd):
+        """Restore the window’s taskbar icon."""
+        ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+        ex = (ex | win32con.WS_EX_APPWINDOW) & ~win32con.WS_EX_TOOLWINDOW
+        win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex)
+        win32gui.SetWindowPos(
+            hwnd, None, 0, 0, 0, 0,
+            win32con.SWP_NOMOVE
+          | win32con.SWP_NOSIZE
+          | win32con.SWP_NOZORDER
+          | win32con.SWP_FRAMECHANGED
+        )
+        
+    def _on_enable(self, on: bool):
+        """Enable or disable edge‐triggered pop‐outs."""
+        if on:
+            # 1) hide all assigned windows off-screen & remove from taskbar
+            for seg, lst in self.window_cfg.items():
+                for cfg in lst:
+                    self._hide_taskbar(cfg["hwnd"])
+                    # slide out immediately
+                    self._slide_cfg(cfg, seg, into_view=False)
+            # reset state
+            self.segment_active = None
+            self.interacting = False
+            # 2) start both edge and focus polls
+            self.edge_timer.start()
+            self.focus_timer.start()
+            self.remove_btn.setEnabled(False)
+
+        else:
+            # 1) stop polling
+            self.edge_timer.stop()
+            self.focus_timer.stop()
+            # 2) slide all back in, then restore taskbar icons
+            def _restore(cfg):
+                self._show_taskbar(cfg["hwnd"])
+            for seg, lst in self.window_cfg.items():
+                for cfg in lst:
+                    # slide back in, then restore icon
+                    self._slide_cfg(
+                        cfg, seg, into_view=True,
+                        cb=lambda cfg=cfg: _restore(cfg)
+                    )
+            # clear interaction flag
+            self.interacting = False
+            self._on_assign_sel()
+          
+    def _populate_windows(self):
+        self.win_list.clear()
+        for hwnd, title in enum_visible_windows():
+            self.win_list.addItem(f"{hwnd} | {title}")
+        self._on_sel()
+
+    def _on_sel(self):
+        has = bool(self.win_list.selectedItems())
+        for ctl in (
+            self.seg_combo, self.speed, self.steps,
+            self.chk_ease, self.chk_fade, self.assign_btn
+        ):
+            ctl.setEnabled(has)
+        self.enable_btn.setEnabled(any(self.window_cfg.values()))
+
+    def _assign(self):
+        item = self.win_list.currentItem()
+        if not item: return
+        hwnd = int(item.text().split("|",1)[0].strip())
+        seg = self.seg_combo.currentText()
+        l,t,r,b = win32gui.GetWindowRect(hwnd)
+        cfg = {
+            "hwnd": hwnd, "orig": (l,t,r,b),
+            "steps": self.steps.value(),
+            "interval": self.speed.value(),
+            "ease": self.chk_ease.isChecked(),
+            "fade": self.chk_fade.isChecked()
+        }
+        # avoid duplicates
+        if not any(c["hwnd"] == hwnd for c in self.window_cfg[seg]):
+            self.window_cfg[seg].append(cfg)
+        self._refresh_assignments()
+
+    def _refresh_assignments(self):
+        self.assign_list.clear()
+        for seg, lst in self.window_cfg.items():
+            for c in lst:
+                title = win32gui.GetWindowText(c["hwnd"])
+                self.assign_list.addItem(f"{seg} | {title} | {c['hwnd']}")
+        self._on_sel()
+
+    def _on_assign_sel(self):
+        """Enable Remove only when an assignment is selected AND edge‐trigger is off."""
+        can_remove = bool(self.assign_list.selectedItems()) and not self.enable_btn.isChecked()
+        self.remove_btn.setEnabled(can_remove)
+
+    def _remove_assignment(self):
+        sel = self.assign_list.currentItem()
+        if not sel: return
+        seg, _, hwnd_str = sel.text().rsplit("|", 2)
+        seg = seg.strip(); hwnd = int(hwnd_str.strip())
+        self.window_cfg[seg] = [
+            c for c in self.window_cfg[seg] if c["hwnd"] != hwnd
+        ]
+        self._refresh_assignments()
+        
+    def _compute_positions(self, hwnd, dir_idx, orig):
+        # find monitor bounds for this window
+        mon = win32api.MonitorFromWindow(
+            hwnd, win32con.MONITOR_DEFAULTTONEAREST
+        )
+        mi = win32api.GetMonitorInfo(mon)
+        lm, tm, rm, bm = mi['Monitor']
+
+        l, t, r, b = orig
+        w, h = r - l, b - t
+        pad = 2
+
+        left_x   = lm - w - pad
+        right_x  = rm + pad
+        top_y    = tm - h - pad
+        bottom_y = bm + pad
+
+        if dir_idx == 0:   # Left
+            return ((left_x, t), (l, t))
+        if dir_idx == 1:   # Right
+            return ((right_x, t), (l, t))
+        if dir_idx == 2:   # Top
+            return ((l, top_y), (l, t))
+        # Bottom
+        return ((l, bottom_y), (l, t))
+
+    def _slide_cfg(self, cfg, seg, into_view, cb=None):
+        idx = DIRECTION_MAP[seg]
+        start, end = self._compute_positions(cfg["hwnd"], idx, cfg["orig"])
+        if not into_view:
+            start, end = end, start
+
+        # wrap callback to track interaction state
+        def done():
+            if into_view:
+                self.interacting = True
+            if cb:
+                cb()
+
+        anim = Slider(
+            cfg["hwnd"], start, end,
+            cfg["steps"], cfg["interval"],
+            use_ease=cfg["ease"], use_fade=cfg["fade"],
+            into_view=into_view,
+            activate_on_show=into_view,
+            cb=done
+        )
+        self.animators.append(anim)
+        anim.start()
+
+    def _get_seg_hit(self, x, y):
+        geom = QApplication.primaryScreen().geometry()
+        sw, sh = geom.width(), geom.height()
+        m = 3
+        midx, midy = sw//2, sh//2
+        if y <= m:
+            return 0 if x <= midx else 1
+        if y >= sh - m:
+            return 5 if x <= midx else 4
+        if x <= m:
+            return 7 if y <= midy else 6
+        if x >= sw - m:
+            return 2 if y <= midy else 3
+        return None
+        
+    def _check_cursor_edge(self):
+        if not self.enable_btn.isChecked() or self.interacting:
+            return
+        pos = QCursor.pos()
+        hit = self._get_seg_hit(pos.x(), pos.y())
+        want = self.seg_combo.currentIndex()
+
+        # only on first entering the correct edge
+        if hit == want and self.segment_active is None:
+            self.segment_active = want
+            for c in self.window_cfg[SEGMENTS[want]]:
+                self._slide_cfg(c, SEGMENTS[want], into_view=True)
+
+    def _check_focus(self):
+        if not self.enable_btn.isChecked() or not self.interacting:
+            return
+        fg = win32gui.GetForegroundWindow()
+        seg = SEGMENTS[self.segment_active]
+        # if focus leaves all windows in this segment → hide them
+        if not any(c["hwnd"] == fg for c in self.window_cfg[seg]):
+            for c in self.window_cfg[seg]:
+                self._slide_cfg(c, seg, into_view=False)
+            self.segment_active = None
+            self.interacting = False
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    win = SlideAnyWindowApp()
+    win.resize(550, 650)
+    win.show()
+    sys.exit(app.exec())
