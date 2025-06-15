@@ -455,11 +455,11 @@ class SlideAnyWindowApp(QMainWindow):
             self.segment_active = None
             self.interacting = False
 
-    def changeEvent(self, ev):
-        super().changeEvent(ev)
-        if ev.type() == ev.Type.WindowStateChange and self.isMinimized():
-            QTimer.singleShot(0, self.hide)
-            self.tray_icon.show()
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == event.Type.WindowStateChange and self.isMinimized():
+            QTimer.singleShot(0, self.hide)  # 🔹 Ensure it actually hides
+            self.tray_icon.show()            # 🔹 Make sure tray icon is visible
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
@@ -468,7 +468,7 @@ class SlideAnyWindowApp(QMainWindow):
     def _restore_from_tray(self):
         self.showNormal()
         self.activateWindow()
-        self.tray_icon.hide()
+        self.tray_icon.hide()   # 🔹 Remove tray icon once restored
 
     def closeEvent(self, ev):
         if self.enable_btn.isChecked():
