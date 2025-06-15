@@ -326,24 +326,32 @@ class SlideAnyWindowApp(QMainWindow):
     # — Edge trigger ON/OFF ————————————————————————————————————
     def _on_enable(self, on: bool):
         if on:
+            # Enable: hide off-screen and make topmost
             for seg, lst in self.window_cfg.items():
                 for cfg in lst:
                     self._hide_taskbar(cfg["hwnd"])
                     self._slide_cfg(cfg, seg, into_view=False)
-            self.segment_active = None
+                self.segment_active = None
             self.interacting = False
             self.edge_timer.start()
             self.focus_timer.start()
             self.remove_btn.setEnabled(False)
+
         else:
+            # Disable: slide all back in & restore normal stacking
             self.edge_timer.stop()
             self.focus_timer.stop()
-            def restore(cfg):
+            
+            def _restore(cfg):
                 self._show_taskbar(cfg["hwnd"])
+                win32gui.SetWindowPos(cfg["hwnd"], win32con.HWND_NOTOPMOST,
+                                      0, 0, 0, 0,
+                                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+
             for seg, lst in self.window_cfg.items():
                 for cfg in lst:
-                    self._slide_cfg(cfg, seg, into_view=True,
-                                    cb=lambda cfg=cfg: restore(cfg))
+                    self._slide_cfg(cfg, seg, into_view=True, cb=lambda cfg=cfg: _restore(cfg))
+            
             self.interacting = False
             self._on_assign_sel()
 
