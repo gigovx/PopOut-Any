@@ -391,11 +391,26 @@ class SlideAnyWindowApp(QMainWindow):
         start, end = self._compute_positions(cfg["hwnd"], idx, cfg["orig"])
         if not into_view:
             start, end = end, start
+
         def done():
             if into_view:
                 self.interacting = True
+                # 🔹 Ensure window moves **above full-screen** windows!
+                win32gui.SetWindowPos(
+                    cfg["hwnd"], win32con.HWND_TOPMOST,
+                    end[0], end[1], 0, 0,
+                    win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE
+                )
+
+                # 🔹 Force focus ONLY if necessary
+                try:
+                    win32gui.SetForegroundWindow(cfg["hwnd"])
+                except Exception:
+                    pass
+            
             if cb:
                 cb()
+
         anim = Slider(
             cfg["hwnd"], start, end,
             cfg["steps"], cfg["interval"],
