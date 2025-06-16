@@ -5,7 +5,7 @@ a = Analysis(
     ['popout-any.py'],
     pathex=[],
     binaries=[],
-    datas=[('monitor_base.png', '.'), ('tray_icon.png', '.')],
+    datas=[('icon.ico', '.'), ('monitor_base.png', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
