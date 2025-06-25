@@ -8,7 +8,7 @@ Made entirely using Co-Pilot, including the graphics. There are issues. But it d
 <br>
 Usage:<br>
 Select the app from the list, it will only detect apps that are currently visible on the screen, if it's minimised it won't detect it, select refresh to refresh the list of apps.<br>
-Select the edge you want it to pop/slide out from, currently: Top Left, Top Right, Right Top, Right Bottom, Bottom Left, Bottom Right, Left Bottom, Left Top.<br>
+Select the edge you want it to pop/slide out from: Top Left, ,Top Middle, Top Right, Right Top, Right Bottom, Bottom Left, Bottom Middle, Bottom Right, Left Bottom, Left Top.<br>
 Choose your Interval, Steps, Dwell (delay) (default values are normally decent enough)<br>
 Choose and animation, not needed but a fading transparent effect makes it look nicer<br>
 Assign the Window, go back and repeat for any more you want to add<br>
@@ -19,3 +19,4 @@ Finally Enable Edge Trigger, this will enable the functions, the window(s) will 
 <br>
 Known Issues<br>
 If the app crashes, your windows can sometime become lost off the screen, normally a forced closure and a restart will solve the issue of not being able to see the app.<br>
+If you are using more than one monitor the 'conected' side of the screens won't take the edge detection settings, but you will still be able assign them.
