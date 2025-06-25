@@ -17,6 +17,9 @@ Finally Enable Edge Trigger, this will enable the functions, the window(s) will 
 <br>
 ![image](https://github.com/user-attachments/assets/51fff49f-880f-46e2-9160-0de4e66b7a52)<br>
 <br>
+https://github.com/user-attachments/assets/236d5e69-4a10-4f28-b541-d5a9c4408ef3
+<br>
+<br>
 <br>
 Known Issues<br>
 If the app crashes, your windows can sometime become lost off the screen, normally a forced closure and a restart will solve the issue of not being able to see the app.<br>
