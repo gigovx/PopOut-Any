@@ -19,4 +19,3 @@ Finally Enable Edge Trigger, this will enable the functions, the window(s) will 
 <br>
 Known Issues<br>
 If the app crashes, your windows can sometime become lost off the screen, normally a forced closure and a restart will solve the issue of not being able to see the app.<br>
-Only works on your Primary Monitor, I have not test with multiple screens.<br>
