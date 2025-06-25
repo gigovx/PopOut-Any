@@ -14,11 +14,7 @@ Choose and animation, not needed but a fading transparent effect makes it look n
 Assign the Window, go back and repeat for any more you want to add<br>
 Finally Enable Edge Trigger, this will enable the functions, the window(s) will then slide off the screen, feel free to close PopOut-Any and it will go to the System Tray.<br>
 <br>
-<br>
-![image](https://github.com/user-attachments/assets/51fff49f-880f-46e2-9160-0de4e66b7a52)<br>
-<br>
-https://github.com/user-attachments/assets/236d5e69-4a10-4f28-b541-d5a9c4408ef3
-<br>
+<br>![ScreenShot](https://github.com/user-attachments/assets/e67e1c21-42d1-4ee1-8ced-00a487afddbf)<br>
 <br>
 <br>
 Known Issues<br>
